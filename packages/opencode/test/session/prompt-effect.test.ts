@@ -451,7 +451,193 @@ it.live("loop continues when finish is tool-calls", () =>
   ),
 )
 
-it.live("ralph reminder includes semantic version guidance", () =>
+it.live("ralph auto mode activates for iterative tasks", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "keep improving until there is nothing left" }],
+      })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      expect(
+        msgs.some(
+          (msg) =>
+            msg.info.role === "user" &&
+            msg.parts.some(
+              (part) =>
+                part.type === "text" && part.synthetic && part.text.includes("Ralph loop is enabled for this task"),
+            ),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: {
+          ralph_loop: true,
+        },
+      }),
+    },
+  ),
+)
+
+it.live("ralph auto mode catches add-style iterative tasks", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "keep going and add tests until done" }],
+      })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      expect(
+        msgs.some(
+          (msg) =>
+            msg.info.role === "user" &&
+            msg.parts.some(
+              (part) =>
+                part.type === "text" && part.synthetic && part.text.includes("Ralph loop is enabled for this task"),
+            ),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: {
+          ralph_loop: true,
+        },
+      }),
+    },
+  ),
+)
+
+it.live("ralph auto mode skips ordinary tasks", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      expect(
+        msgs.some(
+          (msg) =>
+            msg.info.role === "user" &&
+            msg.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("Ralph loop")),
+        ),
+      ).toBe(false)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: {
+          ralph_loop: true,
+        },
+      }),
+    },
+  ),
+)
+
+it.live("ralph auto mode skips iterative review tasks", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "keep reviewing until no issues remain" }],
+      })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      expect(
+        msgs.some(
+          (msg) =>
+            msg.info.role === "user" &&
+            msg.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("Ralph loop")),
+        ),
+      ).toBe(false)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: {
+          ralph_loop: true,
+        },
+      }),
+    },
+  ),
+)
+
+it.live("ralph manual mode waits for an explicit request", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "Use Ralph and keep going until I stop you" }],
+      })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      expect(
+        msgs.some(
+          (msg) =>
+            msg.info.role === "user" &&
+            msg.parts.some(
+              (part) =>
+                part.type === "text" && part.synthetic && part.text.includes("Ralph loop is enabled for this task"),
+            ),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: {
+          ralph_loop: {
+            mode: "manual",
+          },
+        },
+      }),
+    },
+  ),
+)
+
+it.live("ralph always mode includes semantic version guidance", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
       const { prompt, chat } = yield* boot()
@@ -485,7 +671,9 @@ it.live("ralph reminder includes semantic version guidance", () =>
       config: (url) => ({
         ...providerCfg(url),
         experimental: {
-          ralph_loop: true,
+          ralph_loop: {
+            mode: "always",
+          },
         },
       }),
     },
@@ -535,6 +723,7 @@ it.live(
           ...providerCfg(url),
           experimental: {
             ralph_loop: {
+              mode: "always",
               max: 2,
             },
           },
@@ -583,6 +772,7 @@ it.live(
           ...providerCfg(url),
           experimental: {
             ralph_loop: {
+              mode: "always",
               max: 2,
             },
           },
@@ -631,6 +821,7 @@ it.live(
           ...providerCfg(url),
           experimental: {
             ralph_loop: {
+              mode: "always",
               max: 2,
             },
           },
@@ -693,6 +884,7 @@ it.live(
           ...providerCfg(url),
           experimental: {
             ralph_loop: {
+              mode: "always",
               max: 2,
             },
           },

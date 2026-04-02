@@ -447,7 +447,7 @@ export const BashTool = Tool.define("bash", async () => {
   const raw = (await Config.get()).experimental?.ralph_loop
   const ralph =
     raw === true || (typeof raw === "object" && raw !== null && raw.enabled !== false)
-      ? "\n- Ralph loop is enabled in config. Treat that as an explicit user request to run git add, git commit, and git push after each meaningful improvement, while still following the Git Safety Protocol and avoiding unrelated changes. Also bump the relevant project version before each commit using semantic versioning in `vX.X.X` format (`Major.Minor.BugFix`)."
+      ? "\n- Ralph loop is enabled in config. When the current task includes a Ralph loop reminder, treat that as an explicit user request to run git add, git commit, and git push after each meaningful improvement, while still following the Git Safety Protocol and avoiding unrelated changes. Also bump the relevant project version before each commit using semantic versioning in `vX.X.X` format (`Major.Minor.BugFix`)."
       : ""
   const chain =
     name === "powershell"

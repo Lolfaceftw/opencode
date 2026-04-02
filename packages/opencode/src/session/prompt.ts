@@ -64,6 +64,30 @@ IMPORTANT:
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 const RALPH = "Ralph loop"
 const PASS = `${RALPH} pass`
+const KEEP = [
+  /\bkeep (going|iterating|improving|looping)\b/i,
+  /\b(iterate|loop|continue)\b.*\b(until|again|further)\b/i,
+  /\buntil (?:i cancel|i stop|cancelled|canceled|done|finished|there is nothing left|no worthwhile improvement remains)\b/i,
+  /\bafter each (?:meaningful )?improvement\b/i,
+  /\beach pass\b/i,
+  /\bcommit and push\b.*\b(after each|then continue|keep going)\b/i,
+]
+const WORK = [
+  /\bimprov(?:e|ing|ement)\b/i,
+  /\bfix(?:es|ing)?\b/i,
+  /\b(add|create|edit|implement|make|modify|patch|refactor|update|write)\b/i,
+  /\b(commit|push|version|release|checkpoint)\b/i,
+]
+const SKIP = [
+  /\bread-?only\b/i,
+  /\bjust explain\b/i,
+  /\bexplain only\b/i,
+  /\bdo not (?:commit|push|edit|change)\b/i,
+  /\bdon't (?:commit|push|edit|change)\b/i,
+  /\bplan only\b/i,
+  /\binspect only\b/i,
+  /\b(review|audit|analy[sz]e|inspect|explore)\b.*\b(until|again|further|done|finished)\b/i,
+]
 
 function note(input: { max: number; pass?: number }) {
   const turn = input.pass
@@ -88,6 +112,24 @@ function mutates(cmd: string) {
     ) ||
     /(Bun\.write\(|writeFile\(|writeFileSync\(|write_text\(|write_bytes\()/i.test(cmd)
   )
+}
+
+function tag(part: MessageV2.Part) {
+  return part.type === "text" && part.synthetic && part.text.includes(RALPH)
+}
+
+function text(parts: MessageV2.Part[]) {
+  return parts.flatMap((part) => (part.type === "text" && !part.synthetic ? [part.text] : [])).join("\n")
+}
+
+function asks(val: string) {
+  return /\bralph(?: loop| mode)?\b/i.test(val)
+}
+
+function wants(val: string) {
+  if (SKIP.some((rule) => rule.test(val))) return false
+  if (asks(val)) return true
+  return KEEP.some((rule) => rule.test(val)) && WORK.some((rule) => rule.test(val))
 }
 
 export namespace SessionPrompt {
@@ -139,6 +181,14 @@ export namespace SessionPrompt {
           return { runners }
         }),
       )
+
+      const ralph = Effect.fn("SessionPrompt.ralph")(function* () {
+        const raw = (yield* config.get()).experimental?.ralph_loop
+        if (!raw) return
+        if (raw === true) return { max: 3, mode: "auto" as const }
+        if (raw.enabled === false) return
+        return { max: raw.max ?? 3, mode: raw.mode ?? "auto" }
+      })
 
       const getRunner = (runners: Map<string, Runner<MessageV2.WithParts>>, sessionID: SessionID) => {
         const existing = runners.get(sessionID)
@@ -284,21 +334,15 @@ export namespace SessionPrompt {
         )
         if (!userMessage) return input.messages
 
-        const ralph = Effect.fnUntraced(function* () {
-          const raw = (yield* config.get()).experimental?.ralph_loop
-          if (!raw) return
-          if (raw === true) return { max: 3 }
-          if (raw.enabled === false) return
-          return { max: raw.max ?? 3 }
-        })
-
-        const tagged = (part: MessageV2.Part) => part.type === "text" && part.synthetic && part.text.includes(RALPH)
         const remind = Effect.fnUntraced(function* () {
           const cfg = yield* ralph()
           if (!cfg) return input.messages
           if (input.agent.mode !== "primary" || input.agent.name === "plan") return input.messages
           if (userMessage.info.format?.type === "json_schema") return input.messages
-          if (userMessage.parts.some(tagged)) return input.messages
+          if (userMessage.parts.some(tag)) return input.messages
+          const val = text(userMessage.parts)
+          if (cfg.mode === "manual" && !asks(val)) return input.messages
+          if (cfg.mode === "auto" && !wants(val)) return input.messages
           const part = yield* sessions.updatePart({
             id: PartID.ascending(),
             messageID: userMessage.info.id,
@@ -439,14 +483,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         return yield* remind()
       })
 
-      const ralph = Effect.fn("SessionPrompt.ralph")(function* () {
-        const raw = (yield* config.get()).experimental?.ralph_loop
-        if (!raw) return
-        if (raw === true) return { max: 3 }
-        if (raw.enabled === false) return
-        return { max: raw.max ?? 3 }
-      })
-
       const nudge = Effect.fn("SessionPrompt.nudge")(function* (input: {
         messages: MessageV2.WithParts[]
         user: MessageV2.WithParts & { info: MessageV2.User }
@@ -454,6 +490,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const cfg = yield* ralph()
         if (!cfg) return false
         if (input.user.info.format?.type === "json_schema") return false
+        if (!input.user.parts.some(tag)) return false
 
         const agent = yield* agents.get(input.user.info.agent)
         if (!agent || agent.mode !== "primary" || agent.name === "plan") return false

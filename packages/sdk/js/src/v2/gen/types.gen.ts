@@ -1420,6 +1420,10 @@ export type RalphLoopConfig =
   | {
       enabled?: boolean
       /**
+       * How Ralph loop starts: auto detects iterative tasks, always forces it on, manual waits for an explicit Ralph request
+       */
+      mode?: "auto" | "always" | "manual"
+      /**
        * Maximum Ralph loop passes before stopping
        */
       max?: number

@@ -652,6 +652,12 @@ export namespace Config {
       z
         .object({
           enabled: z.boolean().optional(),
+          mode: z
+            .enum(["auto", "always", "manual"])
+            .optional()
+            .describe(
+              "How Ralph loop starts: auto detects iterative tasks, always forces it on, manual waits for an explicit Ralph request",
+            ),
           max: z.number().int().positive().optional().describe("Maximum Ralph loop passes before stopping"),
         })
         .strict(),
