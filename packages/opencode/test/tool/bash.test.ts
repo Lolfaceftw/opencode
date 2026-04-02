@@ -145,6 +145,7 @@ describe("tool.bash", () => {
       fn: async () => {
         const bash = await BashTool.init()
         expect(bash.description).toContain("Ralph loop is enabled in config")
+        expect(bash.description).toContain("vX.X.X")
       },
     })
   })

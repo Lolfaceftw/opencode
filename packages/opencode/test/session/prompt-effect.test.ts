@@ -451,6 +451,47 @@ it.live("loop continues when finish is tool-calls", () =>
   ),
 )
 
+it.live("ralph reminder includes semantic version guidance", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      expect(
+        msgs.some(
+          (msg) =>
+            msg.info.role === "user" &&
+            msg.parts.some(
+              (part) =>
+                part.type === "text" &&
+                part.synthetic &&
+                part.text.includes("vX.X.X") &&
+                part.text.includes("Major.Minor.BugFix"),
+            ),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: {
+          ralph_loop: true,
+        },
+      }),
+    },
+  ),
+)
+
 it.live(
   "ralph loop nudges another pass after meaningful changes",
   () =>

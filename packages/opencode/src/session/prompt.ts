@@ -74,6 +74,8 @@ ${turn}
 
 After each meaningful improvement, inspect git status/diff, stage only the relevant changes, create a commit, and push to the current tracking branch. Do not force-push and do not include unrelated user changes.
 
+Also increment the relevant project version before each commit using semantic versioning in 'vX.X.X' format ('Major.Minor.BugFix'). Use major for breaking changes, minor for backwards-compatible features, and bugfix for backwards-compatible fixes.
+
 Keep iterating until no worthwhile improvement remains or you reach the Ralph loop limit of ${input.max} passes. Each pass should leave a clean version-control checkpoint behind.
 </system-reminder>`
 }

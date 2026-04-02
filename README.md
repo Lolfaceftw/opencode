@@ -114,7 +114,7 @@ Learn more about [agents](https://opencode.ai/docs/agents).
 
 ### Ralph loop (experimental)
 
-OpenCode can keep nudging a primary agent through repeated improvement passes. When Ralph loop is enabled, the agent treats `git add`, `git commit`, and `git push` as explicitly authorized for each meaningful improvement, then continues until no worthwhile improvement remains or the configured limit is reached.
+OpenCode can keep nudging a primary agent through repeated improvement passes. When Ralph loop is enabled, the agent treats `git add`, `git commit`, and `git push` as explicitly authorized for each meaningful improvement, bumps the relevant project version in `vX.X.X` semantic version format (`Major.Minor.BugFix`), and continues until no worthwhile improvement remains or the configured limit is reached.
 
 ```json
 {
