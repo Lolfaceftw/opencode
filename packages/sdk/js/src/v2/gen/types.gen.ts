@@ -1412,6 +1412,19 @@ export type McpRemoteConfig = {
  */
 export type LayoutConfig = "auto" | "stretch"
 
+/**
+ * Enable Ralph loop nudges. When enabled, the agent keeps iterating on meaningful improvements and treats git add/commit/push as explicitly authorized for each pass.
+ */
+export type RalphLoopConfig =
+  | boolean
+  | {
+      enabled?: boolean
+      /**
+       * Maximum Ralph loop passes before stopping
+       */
+      max?: number
+    }
+
 export type Config = {
   /**
    * JSON schema reference for configuration validation
@@ -1612,6 +1625,7 @@ export type Config = {
      * Continue the agent loop when a tool call is denied
      */
     continue_loop_on_deny?: boolean
+    ralph_loop?: RalphLoopConfig
     /**
      * Timeout in milliseconds for model context protocol (MCP) requests
      */

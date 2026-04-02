@@ -131,6 +131,23 @@ describe("tool.bash", () => {
       },
     })
   })
+
+  test("description mentions Ralph loop when enabled", async () => {
+    await using tmp = await tmpdir({
+      config: {
+        experimental: {
+          ralph_loop: true,
+        },
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const bash = await BashTool.init()
+        expect(bash.description).toContain("Ralph loop is enabled in config")
+      },
+    })
+  })
 })
 
 describe("tool.bash permissions", () => {

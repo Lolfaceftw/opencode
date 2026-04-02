@@ -1,6 +1,7 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { expect, spyOn } from "bun:test"
 import { Cause, Effect, Exit, Fiber, Layer } from "effect"
+import path from "path"
 import z from "zod"
 import type { Agent } from "../../src/agent/agent"
 import { Agent as AgentSvc } from "../../src/agent/agent"
@@ -448,6 +449,216 @@ it.live("loop continues when finish is tool-calls", () =>
     }),
     { git: true, config: providerCfg },
   ),
+)
+
+it.live(
+  "ralph loop nudges another pass after meaningful changes",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir, llm }) {
+        const { prompt, chat } = yield* boot()
+        const a = path.join(dir, "first.txt")
+        const b = path.join(dir, "second.txt")
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "keep improving until there is nothing left" }],
+        })
+        yield* llm.tool("write", { filePath: a, content: "one\n" })
+        yield* llm.text("first pass done")
+        yield* llm.tool("write", { filePath: b, content: "two\n" })
+        yield* llm.text("all done")
+
+        const result = yield* prompt.loop({ sessionID: chat.id })
+        expect(result.info.role).toBe("assistant")
+        expect(yield* llm.calls).toBe(4)
+        expect(yield* Effect.promise(() => Bun.file(a).text())).toBe("one\n")
+        expect(yield* Effect.promise(() => Bun.file(b).text())).toBe("two\n")
+
+        const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+        expect(
+          msgs.some(
+            (msg) =>
+              msg.info.role === "user" &&
+              msg.parts.some(
+                (part) => part.type === "text" && part.synthetic && part.text.includes("Ralph loop pass 2 of 2"),
+              ),
+          ),
+        ).toBe(true)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: {
+            ralph_loop: {
+              max: 2,
+            },
+          },
+        }),
+      },
+    ),
+  15_000,
+)
+
+it.live(
+  "ralph loop nudges after mutating bash turns",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir, llm }) {
+        const { prompt, chat } = yield* boot()
+        const a = path.join(dir, "bash-one.txt").replaceAll("\\", "/")
+        const b = path.join(dir, "bash-two.txt").replaceAll("\\", "/")
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "keep improving with shell commands" }],
+        })
+        yield* llm.tool("bash", {
+          command: `bun -e "await Bun.write('${a}', 'one\\n')"`,
+          description: "Writes first file",
+          workdir: dir,
+        })
+        yield* llm.text("first pass done")
+        yield* llm.tool("bash", {
+          command: `bun -e "await Bun.write('${b}', 'two\\n')"`,
+          description: "Writes second file",
+          workdir: dir,
+        })
+        yield* llm.text("all done")
+
+        yield* prompt.loop({ sessionID: chat.id })
+        expect(yield* llm.calls).toBe(4)
+        expect(yield* Effect.promise(() => Bun.file(a).text())).toBe("one\n")
+        expect(yield* Effect.promise(() => Bun.file(b).text())).toBe("two\n")
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: {
+            ralph_loop: {
+              max: 2,
+            },
+          },
+        }),
+      },
+    ),
+  20_000,
+)
+
+it.live(
+  "ralph loop ignores read-only bash turns",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir, llm }) {
+        const { prompt, chat } = yield* boot()
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "inspect the repo" }],
+        })
+        yield* llm.tool("bash", {
+          command: "git status --short --branch",
+          description: "Shows git status",
+          workdir: dir,
+        })
+        yield* llm.text("checked")
+
+        const result = yield* prompt.loop({ sessionID: chat.id })
+        expect(result.info.role).toBe("assistant")
+        expect(yield* llm.calls).toBe(2)
+
+        const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+        expect(
+          msgs.some(
+            (msg) =>
+              msg.info.role === "user" &&
+              msg.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("Ralph loop pass")),
+          ),
+        ).toBe(false)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: {
+            ralph_loop: {
+              max: 2,
+            },
+          },
+        }),
+      },
+    ),
+  15_000,
+)
+
+it.live(
+  "ralph loop resets pass budget for a new user turn",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir, llm }) {
+        const { prompt, chat } = yield* boot()
+        const a = path.join(dir, "first.txt")
+        const b = path.join(dir, "second.txt")
+        const c = path.join(dir, "third.txt")
+        const d = path.join(dir, "fourth.txt")
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "make another improvement" }],
+        })
+        yield* llm.tool("write", { filePath: a, content: "one\n" })
+        yield* llm.text("first pass done")
+        yield* llm.tool("write", { filePath: b, content: "two\n" })
+        yield* llm.text("first task complete")
+        yield* prompt.loop({ sessionID: chat.id })
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "make a fresh improvement" }],
+        })
+        yield* llm.tool("write", { filePath: c, content: "three\n" })
+        yield* llm.text("second pass done")
+        yield* llm.tool("write", { filePath: d, content: "four\n" })
+        yield* llm.text("second task complete")
+        yield* prompt.loop({ sessionID: chat.id })
+
+        expect(yield* llm.calls).toBe(8)
+        expect(yield* Effect.promise(() => Bun.file(c).text())).toBe("three\n")
+        expect(yield* Effect.promise(() => Bun.file(d).text())).toBe("four\n")
+
+        const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+        expect(
+          msgs
+            .flatMap((msg) => msg.parts)
+            .filter((part) => part.type === "text" && part.synthetic && part.text.includes("Ralph loop pass 2 of 2"))
+            .length,
+        ).toBe(2)
+      }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          experimental: {
+            ralph_loop: {
+              max: 2,
+            },
+          },
+        }),
+      },
+    ),
+  20_000,
 )
 
 it.live("failed subtask preserves metadata on error tool state", () =>

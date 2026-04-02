@@ -106,6 +106,25 @@ test("loads JSON config file", async () => {
   })
 })
 
+test("loads experimental ralph loop config", async () => {
+  await using tmp = await tmpdir({
+    config: {
+      experimental: {
+        ralph_loop: {
+          max: 4,
+        },
+      },
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.experimental?.ralph_loop).toEqual({ max: 4 })
+    },
+  })
+})
+
 test("loads project config from Git Bash and MSYS2 paths on Windows", async () => {
   // Git Bash and MSYS2 both use /<drive>/... paths on Windows.
   await check((dir) => {

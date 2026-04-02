@@ -14,6 +14,7 @@ import { Process } from "@/util/process"
 import { fileURLToPath } from "url"
 import { Flag } from "@/flag/flag"
 import { Shell } from "@/shell/shell"
+import { Config } from "@/config/config"
 
 import { BashArity } from "@/permission/arity"
 import { Truncate } from "./truncate"
@@ -443,6 +444,11 @@ const parser = lazy(async () => {
 export const BashTool = Tool.define("bash", async () => {
   const shell = Shell.acceptable()
   const name = Shell.name(shell)
+  const raw = (await Config.get()).experimental?.ralph_loop
+  const ralph =
+    raw === true || (typeof raw === "object" && raw !== null && raw.enabled !== false)
+      ? "\n- Ralph loop is enabled in config. Treat that as an explicit user request to run git add, git commit, and git push after each meaningful improvement, while still following the Git Safety Protocol and avoiding unrelated changes."
+      : ""
   const chain =
     name === "powershell"
       ? "If the commands depend on each other and must run sequentially, avoid '&&' in this shell because Windows PowerShell 5.1 does not support it. Use PowerShell conditionals such as `cmd1; if ($?) { cmd2 }` when later commands must depend on earlier success."
@@ -454,6 +460,7 @@ export const BashTool = Tool.define("bash", async () => {
       .replaceAll("${os}", process.platform)
       .replaceAll("${shell}", name)
       .replaceAll("${chaining}", chain)
+      .replaceAll("${ralph}", ralph)
       .replaceAll("${maxLines}", String(Truncate.MAX_LINES))
       .replaceAll("${maxBytes}", String(Truncate.MAX_BYTES)),
     parameters: z.object({

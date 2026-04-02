@@ -32,6 +32,7 @@ import { spawn } from "child_process"
 import { Command } from "../command"
 import { pathToFileURL, fileURLToPath } from "url"
 import { ConfigMarkdown } from "../config/markdown"
+import { Config } from "../config/config"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/util/error"
 import { SessionProcessor } from "./processor"
@@ -61,6 +62,31 @@ IMPORTANT:
 - This tool provides your final answer - no further actions are taken after calling it`
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+const RALPH = "Ralph loop"
+const PASS = `${RALPH} pass`
+
+function note(input: { max: number; pass?: number }) {
+  const turn = input.pass
+    ? `${PASS} ${input.pass} of ${input.max}. Review the latest state and only keep going if there is another worthwhile improvement to make.`
+    : `${RALPH} is enabled for this task. Treat this as explicit user authorization to use git add, git commit, and git push for each meaningful improvement.`
+  return `<system-reminder>
+${turn}
+
+After each meaningful improvement, inspect git status/diff, stage only the relevant changes, create a commit, and push to the current tracking branch. Do not force-push and do not include unrelated user changes.
+
+Keep iterating until no worthwhile improvement remains or you reach the Ralph loop limit of ${input.max} passes. Each pass should leave a clean version-control checkpoint behind.
+</system-reminder>`
+}
+
+function mutates(cmd: string) {
+  return (
+    /(^|[^<])>>?/.test(cmd) ||
+    /\b(git\s+(add|commit|push|checkout|switch|merge|rebase|cherry-pick)|mkdir|touch|mv|cp|rm|del|erase|new-item|set-content|add-content|copy-item|move-item|rename-item|prettier\b.*--write|eslint\b.*--fix)\b/i.test(
+      cmd,
+    ) ||
+    /(Bun\.write\(|writeFile\(|writeFileSync\(|write_text\(|write_bytes\()/i.test(cmd)
+  )
+}
 
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
@@ -90,6 +116,7 @@ export namespace SessionPrompt {
       const plugin = yield* Plugin.Service
       const commands = yield* Command.Service
       const permission = yield* Permission.Service
+      const config = yield* Config.Service
       const fsys = yield* AppFileSystem.Service
       const mcp = yield* MCP.Service
       const lsp = yield* LSP.Service
@@ -250,8 +277,37 @@ export namespace SessionPrompt {
         agent: Agent.Info
         session: Session.Info
       }) {
-        const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
+        const userMessage = input.messages.findLast(
+          (msg): msg is MessageV2.WithParts & { info: MessageV2.User } => msg.info.role === "user",
+        )
         if (!userMessage) return input.messages
+
+        const ralph = Effect.fnUntraced(function* () {
+          const raw = (yield* config.get()).experimental?.ralph_loop
+          if (!raw) return
+          if (raw === true) return { max: 3 }
+          if (raw.enabled === false) return
+          return { max: raw.max ?? 3 }
+        })
+
+        const tagged = (part: MessageV2.Part) => part.type === "text" && part.synthetic && part.text.includes(RALPH)
+        const remind = Effect.fnUntraced(function* () {
+          const cfg = yield* ralph()
+          if (!cfg) return input.messages
+          if (input.agent.mode !== "primary" || input.agent.name === "plan") return input.messages
+          if (userMessage.info.format?.type === "json_schema") return input.messages
+          if (userMessage.parts.some(tagged)) return input.messages
+          const part = yield* sessions.updatePart({
+            id: PartID.ascending(),
+            messageID: userMessage.info.id,
+            sessionID: userMessage.info.sessionID,
+            type: "text",
+            text: note({ max: cfg.max }),
+            synthetic: true,
+          })
+          userMessage.parts.push(part)
+          return input.messages
+        })
 
         if (!Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE) {
           if (input.agent.name === "plan") {
@@ -275,7 +331,7 @@ export namespace SessionPrompt {
               synthetic: true,
             })
           }
-          return input.messages
+          return yield* remind()
         }
 
         const assistantMessage = input.messages.findLast((msg) => msg.info.role === "assistant")
@@ -292,10 +348,10 @@ export namespace SessionPrompt {
             synthetic: true,
           })
           userMessage.parts.push(part)
-          return input.messages
+          return yield* remind()
         }
 
-        if (input.agent.name !== "plan" || assistantMessage?.info.agent === "plan") return input.messages
+        if (input.agent.name !== "plan" || assistantMessage?.info.agent === "plan") return yield* remind()
 
         const plan = Session.plan(input.session)
         const exists = yield* fsys.existsSafe(plan)
@@ -378,7 +434,76 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           synthetic: true,
         })
         userMessage.parts.push(part)
-        return input.messages
+        return yield* remind()
+      })
+
+      const ralph = Effect.fn("SessionPrompt.ralph")(function* () {
+        const raw = (yield* config.get()).experimental?.ralph_loop
+        if (!raw) return
+        if (raw === true) return { max: 3 }
+        if (raw.enabled === false) return
+        return { max: raw.max ?? 3 }
+      })
+
+      const nudge = Effect.fn("SessionPrompt.nudge")(function* (input: {
+        messages: MessageV2.WithParts[]
+        user: MessageV2.WithParts & { info: MessageV2.User }
+      }) {
+        const cfg = yield* ralph()
+        if (!cfg) return false
+        if (input.user.info.format?.type === "json_schema") return false
+
+        const agent = yield* agents.get(input.user.info.agent)
+        if (!agent || agent.mode !== "primary" || agent.name === "plan") return false
+
+        const next =
+          input.user.parts
+            .flatMap((part) => {
+              if (part.type !== "text" || !part.synthetic) return []
+              const hit = part.text.match(/Ralph loop pass (\d+) of \d+/)
+              return hit ? [Number(hit[1]) + 1] : []
+            })
+            .at(-1) ?? 2
+        if (next > cfg.max) return false
+
+        const at = input.messages.findLastIndex((msg) => msg.info.id === input.user.info.id)
+        const turn = at < 0 ? [] : input.messages.slice(at + 1)
+        const dirty = turn.some(
+          (msg) =>
+            msg.info.role === "assistant" &&
+            msg.parts.some((part) => {
+              if (part.type === "patch") return part.files.length > 0
+              if (part.type !== "tool" || part.state.status !== "completed") return false
+              if (["apply_patch", "edit", "write"].includes(part.tool)) return true
+              if (part.tool !== "bash") return false
+              const cmd = part.state.input.command
+              return typeof cmd === "string" && mutates(cmd)
+            }),
+        )
+        if (!dirty) return false
+
+        const msg: MessageV2.User = {
+          id: MessageID.ascending(),
+          sessionID: input.user.info.sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: input.user.info.agent,
+          model: input.user.info.model,
+          format: input.user.info.format,
+          system: input.user.info.system,
+          tools: input.user.info.tools,
+          variant: input.user.info.variant,
+        }
+        yield* sessions.updateMessage(msg)
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: msg.id,
+          sessionID: msg.sessionID,
+          type: "text",
+          text: note({ max: cfg.max, pass: next }),
+          synthetic: true,
+        })
+        return true
       })
 
       const resolveTools = Effect.fn("SessionPrompt.resolveTools")(function* (input: {
@@ -1363,12 +1488,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             let msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(sessionID)))
 
             let lastUser: MessageV2.User | undefined
+            let lastUserMsg: (MessageV2.WithParts & { info: MessageV2.User }) | undefined
             let lastAssistant: MessageV2.Assistant | undefined
             let lastFinished: MessageV2.Assistant | undefined
             let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
             for (let i = msgs.length - 1; i >= 0; i--) {
               const msg = msgs[i]
-              if (!lastUser && msg.info.role === "user") lastUser = msg.info
+              if (!lastUserMsg && msg.info.role === "user") {
+                lastUserMsg = msg as MessageV2.WithParts & { info: MessageV2.User }
+                lastUser = msg.info
+              }
               if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info
               if (!lastFinished && msg.info.role === "assistant" && msg.info.finish) lastFinished = msg.info
               if (lastUser && lastFinished) break
@@ -1382,6 +1511,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               !["tool-calls"].includes(lastAssistant.finish) &&
               lastUser.id < lastAssistant.id
             ) {
+              if (lastUserMsg && (yield* nudge({ messages: msgs, user: lastUserMsg }))) continue
               log.info("exiting loop", { sessionID })
               break
             }
@@ -1719,6 +1849,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
   const defaultLayer = Layer.unwrap(
     Effect.sync(() =>
       layer.pipe(
+        Layer.provide(Config.defaultLayer),
         Layer.provide(SessionStatus.layer),
         Layer.provide(SessionCompaction.defaultLayer),
         Layer.provide(SessionProcessor.defaultLayer),

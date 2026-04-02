@@ -646,6 +646,21 @@ export namespace Config {
     })
   export type Agent = z.infer<typeof Agent>
 
+  export const Ralph = z
+    .union([
+      z.boolean(),
+      z
+        .object({
+          enabled: z.boolean().optional(),
+          max: z.number().int().positive().optional().describe("Maximum Ralph loop passes before stopping"),
+        })
+        .strict(),
+    ])
+    .meta({
+      ref: "RalphLoopConfig",
+    })
+  export type Ralph = z.infer<typeof Ralph>
+
   export const Keybinds = z
     .object({
       leader: z.string().optional().default("ctrl+x").describe("Leader key for keybind combinations"),
@@ -1068,6 +1083,9 @@ export namespace Config {
             .optional()
             .describe("Tools that should only be available to primary agents."),
           continue_loop_on_deny: z.boolean().optional().describe("Continue the agent loop when a tool call is denied"),
+          ralph_loop: Ralph.optional().describe(
+            "Enable Ralph loop nudges. When enabled, the agent keeps iterating on meaningful improvements and treats git add/commit/push as explicitly authorized for each pass.",
+          ),
           mcp_timeout: z
             .number()
             .int()
