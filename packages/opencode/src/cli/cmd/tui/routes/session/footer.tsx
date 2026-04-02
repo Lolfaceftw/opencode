@@ -5,6 +5,7 @@ import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/dialog-model"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
+import { indicator } from "./ralph"
 
 export function Footer() {
   const { theme } = useTheme()
@@ -16,6 +17,15 @@ export function Footer() {
   const permissions = createMemo(() => {
     if (route.data.type !== "session") return []
     return sync.data.permission[route.data.sessionID] ?? []
+  })
+  const ralph = createMemo(() => {
+    if (route.data.type !== "session") return
+    const status = sync.data.session_status?.[route.data.sessionID]
+    return indicator({
+      busy: !!status && status.type !== "idle",
+      messages: sync.data.message[route.data.sessionID] ?? [],
+      parts: sync.data.part,
+    })
   })
   const directory = useDirectory()
   const connected = useConnected()
@@ -65,6 +75,14 @@ export function Footer() {
                 <span style={{ fg: theme.warning }}>△</span> {permissions().length} Permission
                 {permissions().length > 1 ? "s" : ""}
               </text>
+            </Show>
+            <Show when={ralph()}>
+              {(item) => (
+                <text fg={theme.text}>
+                  <span style={{ fg: theme.primary }}>↻</span> {item().title}
+                  <span style={{ fg: theme.textMuted }}> · {item().detail}</span>
+                </text>
+              )}
             </Show>
             <text fg={theme.text}>
               <span style={{ fg: lsp().length > 0 ? theme.success : theme.textMuted }}>•</span> {lsp().length} LSP
