@@ -112,6 +112,24 @@ This is used internally and can be invoked using `@general` in messages.
 
 Learn more about [agents](https://opencode.ai/docs/agents).
 
+### Ralph loop (experimental)
+
+OpenCode can keep nudging a primary agent through repeated improvement passes. When Ralph loop is enabled, the agent treats `git add`, `git commit`, and `git push` as explicitly authorized for each meaningful improvement, then continues until no worthwhile improvement remains or the configured limit is reached.
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "experimental": {
+    "ralph_loop": {
+      "enabled": true,
+      "max": 999999
+    }
+  }
+}
+```
+
+Set `experimental.ralph_loop` to `true` for the default limit of 3 passes, or provide an object to control `enabled` and `max` explicitly.
+
 ### Documentation
 
 For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
