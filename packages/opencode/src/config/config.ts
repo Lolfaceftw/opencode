@@ -658,6 +658,12 @@ export namespace Config {
             .describe(
               "How Ralph loop starts: auto detects iterative tasks, always forces it on, manual waits for an explicit Ralph request",
             ),
+          persist: z
+            .boolean()
+            .optional()
+            .describe(
+              "Keep nudging even after no-change passes, asking the agent to think more creatively before stopping",
+            ),
           max: z.number().int().positive().optional().describe("Maximum Ralph loop passes before stopping"),
         })
         .strict(),

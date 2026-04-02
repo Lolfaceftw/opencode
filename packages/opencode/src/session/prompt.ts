@@ -89,16 +89,24 @@ const SKIP = [
   /\b(review|audit|analy[sz]e|inspect|explore)\b.*\b(until|again|further|done|finished)\b/i,
 ]
 
-function note(input: { max: number; pass?: number }) {
+function note(input: { max: number; pass?: number; persist?: boolean; stale?: boolean }) {
   const turn = input.pass
-    ? `${PASS} ${input.pass} of ${input.max}. Review the latest state and only keep going if there is another worthwhile improvement to make.`
+    ? input.stale
+      ? `${PASS} ${input.pass} of ${input.max}. The previous pass did not produce meaningful changes. Be more creative, think out of the box, and try a different angle before giving up.`
+      : `${PASS} ${input.pass} of ${input.max}. Review the latest state and only keep going if there is another worthwhile improvement to make.`
     : `${RALPH} is enabled for this task. Treat this as explicit user authorization to use git add, git commit, and git push for each meaningful improvement.`
+  const extra = input.persist
+    ? `
+
+If a pass stalls or produces no meaningful changes, do not stop. Instead, think more creatively, explore a different angle, and keep iterating until you find another worthwhile improvement or hit the Ralph limit.`
+    : ""
   return `<system-reminder>
 ${turn}
 
 After each meaningful improvement, inspect git status/diff, stage only the relevant changes, create a commit, and push to the current tracking branch. Do not force-push and do not include unrelated user changes.
 
 Also increment the relevant project version before each commit using semantic versioning in 'vX.X.X' format ('Major.Minor.BugFix'). Use major for breaking changes, minor for backwards-compatible features, and bugfix for backwards-compatible fixes.
+${extra}
 
 Keep iterating until no worthwhile improvement remains or you reach the Ralph loop limit of ${input.max} passes. Each pass should leave a clean version-control checkpoint behind.
 </system-reminder>`
@@ -185,9 +193,9 @@ export namespace SessionPrompt {
       const ralph = Effect.fn("SessionPrompt.ralph")(function* () {
         const raw = (yield* config.get()).experimental?.ralph_loop
         if (!raw) return
-        if (raw === true) return { max: 3, mode: "auto" as const }
+        if (raw === true) return { max: 3, mode: "auto" as const, persist: false }
         if (raw.enabled === false) return
-        return { max: raw.max ?? 3, mode: raw.mode ?? "auto" }
+        return { max: raw.max ?? 3, mode: raw.mode ?? "auto", persist: raw.persist ?? false }
       })
 
       const getRunner = (runners: Map<string, Runner<MessageV2.WithParts>>, sessionID: SessionID) => {
@@ -348,7 +356,7 @@ export namespace SessionPrompt {
             messageID: userMessage.info.id,
             sessionID: userMessage.info.sessionID,
             type: "text",
-            text: note({ max: cfg.max }),
+            text: note({ max: cfg.max, persist: cfg.persist }),
             synthetic: true,
           })
           userMessage.parts.push(part)
@@ -519,7 +527,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               return typeof cmd === "string" && mutates(cmd)
             }),
         )
-        if (!dirty) return false
+        if (!dirty && !cfg.persist) return false
 
         const msg: MessageV2.User = {
           id: MessageID.ascending(),
@@ -539,7 +547,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           messageID: msg.id,
           sessionID: msg.sessionID,
           type: "text",
-          text: note({ max: cfg.max, pass: next }),
+          text: note({ max: cfg.max, pass: next, persist: cfg.persist, stale: !dirty }),
           synthetic: true,
         })
         return true

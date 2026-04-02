@@ -123,13 +123,14 @@ OpenCode can keep nudging a primary agent through repeated improvement passes. W
     "ralph_loop": {
       "enabled": true,
       "mode": "always",
+      "persist": true,
       "max": 999999
     }
   }
 }
 ```
 
-Set `experimental.ralph_loop` to `true` for the default limit of 3 passes in `auto` mode. Use `mode: "auto"` to detect iterative tasks, `mode: "manual"` to wait for an explicit Ralph request, or `mode: "always"` to force Ralph loop on every eligible primary task.
+Set `experimental.ralph_loop` to `true` for the default limit of 3 passes in `auto` mode. Use `mode: "auto"` to detect iterative tasks, `mode: "manual"` to wait for an explicit Ralph request, or `mode: "always"` to force Ralph loop on every eligible primary task. Set `persist: true` to keep nudging even after a no-change pass and tell the agent to think more creatively before stopping.
 
 ### Documentation
 

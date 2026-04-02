@@ -680,6 +680,55 @@ it.live("ralph always mode includes semantic version guidance", () =>
   ),
 )
 
+it.live("ralph persist nudges after a stalled pass", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("stalled")
+      yield* llm.text("still trying")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.role).toBe("assistant")
+      expect(yield* llm.calls).toBe(2)
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      expect(
+        msgs.some(
+          (msg) =>
+            msg.info.role === "user" &&
+            msg.parts.some(
+              (part) =>
+                part.type === "text" &&
+                part.synthetic &&
+                part.text.includes("did not produce meaningful changes") &&
+                part.text.includes("think out of the box"),
+            ),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: {
+          ralph_loop: {
+            mode: "always",
+            persist: true,
+            max: 2,
+          },
+        },
+      }),
+    },
+  ),
+)
+
 it.live(
   "ralph loop nudges another pass after meaningful changes",
   () =>

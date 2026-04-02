@@ -112,6 +112,7 @@ test("loads experimental ralph loop config", async () => {
       experimental: {
         ralph_loop: {
           mode: "manual",
+          persist: true,
           max: 4,
         },
       },
@@ -121,7 +122,7 @@ test("loads experimental ralph loop config", async () => {
     directory: tmp.path,
     fn: async () => {
       const config = await Config.get()
-      expect(config.experimental?.ralph_loop).toEqual({ mode: "manual", max: 4 })
+      expect(config.experimental?.ralph_loop).toEqual({ mode: "manual", persist: true, max: 4 })
     },
   })
 })

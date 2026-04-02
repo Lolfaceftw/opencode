@@ -1424,6 +1424,10 @@ export type RalphLoopConfig =
        */
       mode?: "auto" | "always" | "manual"
       /**
+       * Keep nudging even after no-change passes, asking the agent to think more creatively before stopping
+       */
+      persist?: boolean
+      /**
        * Maximum Ralph loop passes before stopping
        */
       max?: number
