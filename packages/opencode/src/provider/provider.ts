@@ -113,6 +113,104 @@ export namespace Provider {
     })
   }
 
+  function normalizeSSE(res: Response) {
+    if (!res.body) return res
+    if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
+
+    const enc = new TextEncoder()
+    const dec = new TextDecoder()
+    const reader = res.body.getReader()
+    let buf = ""
+
+    const block = (txt: string) => {
+      const data = txt
+        .split(/\r?\n/)
+        .flatMap((row) => (row.startsWith("data:") ? [row.slice(5).replace(/^ /, "")] : []))
+      if (data.length) return data.join("\n")
+      const raw = txt.split(/\r?\n/).flatMap((row) => {
+        const val = row.trim()
+        if (!val || val.startsWith(":")) return []
+        if (/^(data|event|id|retry):/.test(val)) return []
+        return [val]
+      })
+      if (raw.length) return raw.join("\n")
+    }
+
+    const next = (flush: boolean) => {
+      while (true) {
+        const hit = buf.match(/\r?\n\r?\n/)
+        if (hit && hit.index !== undefined) {
+          const txt = buf.slice(0, hit.index)
+          buf = buf.slice(hit.index + hit[0].length)
+          const val = block(txt)
+          if (val) return val
+          continue
+        }
+        const line = buf.match(/^([^\r\n]*)(\r?\n)/)
+        if (line && (line[1].trim().startsWith("{") || line[1].trim() === "[DONE]")) {
+          buf = buf.slice(line[0].length)
+          return line[1].trim()
+        }
+        if (!flush) return
+        const txt = buf.trim()
+        buf = ""
+        if (!txt) return
+        return block(txt) ?? txt
+      }
+    }
+
+    const frame = (txt: string) =>
+      `${txt
+        .split(/\n/)
+        .map((row) => `data: ${row}`)
+        .join("\n")}\n\n`
+
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        async start(ctrl) {
+          while (true) {
+            const part = await reader.read()
+            if (part.done) break
+            buf += dec.decode(part.value, { stream: true })
+            while (true) {
+              const txt = next(false)
+              if (!txt) break
+              ctrl.enqueue(enc.encode(frame(txt)))
+            }
+          }
+          buf += dec.decode()
+          while (true) {
+            const txt = next(true)
+            if (!txt) break
+            ctrl.enqueue(enc.encode(frame(txt)))
+          }
+          ctrl.close()
+        },
+        async cancel(reason) {
+          await reader.cancel(reason)
+        },
+      }),
+      {
+        headers: new Headers(res.headers),
+        status: res.status,
+        statusText: res.statusText,
+      },
+    )
+  }
+
+  function shouldNormalizeSSE(input: unknown, res: Response) {
+    if (!res.headers.get("content-type")?.includes("text/event-stream")) return false
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input instanceof Request
+            ? input.url
+            : String(input)
+    return url.includes("/responses")
+  }
+
   type BundledSDK = {
     languageModel(modelId: string): LanguageModelV3
   }
@@ -1338,11 +1436,15 @@ export namespace Provider {
               }
             }
 
-            const res = await fetchFn(input, {
+            let res = await fetchFn(input, {
               ...opts,
               // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
               timeout: false,
             })
+
+            if (shouldNormalizeSSE(input, res)) {
+              res = normalizeSSE(res)
+            }
 
             if (!chunkAbortCtl) return res
             return wrapSSE(res, chunkTimeout, chunkAbortCtl)

@@ -282,6 +282,125 @@ function createEventResponse(chunks: unknown[], includeDone = false) {
   })
 }
 
+function createRawEventResponse(
+  chunks: Array<{ type?: string }>,
+  includeDone = false,
+  opts?: { lines?: boolean; chunk?: number },
+) {
+  const blocks = opts?.lines
+    ? chunks.map((chunk) => JSON.stringify(chunk))
+    : chunks.map((chunk) => `event: ${chunk.type ?? "message"}\n${JSON.stringify(chunk)}`)
+  if (includeDone) {
+    blocks.push(opts?.lines ? "[DONE]" : "data: [DONE]")
+  }
+  const payload = blocks.join("\n\n") + "\n\n"
+  const enc = new TextEncoder()
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(ctrl) {
+        const size = opts?.chunk
+        if (!size || size <= 0) {
+          ctrl.enqueue(enc.encode(payload))
+          ctrl.close()
+          return
+        }
+        for (let i = 0; i < payload.length; i += size) {
+          ctrl.enqueue(enc.encode(payload.slice(i, i + size)))
+        }
+        ctrl.close()
+      },
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    },
+  )
+}
+
+async function runRawResponsesTest(input: { response: Response; sessionID: string; userID: string }) {
+  const server = state.server
+  if (!server) {
+    throw new Error("Server not initialized")
+  }
+
+  const source = await loadFixture("openai", "gpt-5.2")
+  const model = source.model
+  const request = waitRequest("/responses", input.response)
+
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          enabled_providers: ["openai"],
+          provider: {
+            openai: {
+              name: "OpenAI",
+              env: ["OPENAI_API_KEY"],
+              npm: "@ai-sdk/openai",
+              api: "https://api.openai.com/v1",
+              models: {
+                [model.id]: model,
+              },
+              options: {
+                apiKey: "test-openai-key",
+                baseURL: `${server.url.origin}/v1`,
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const resolved = await Provider.getModel(ProviderID.openai, ModelID.make(model.id))
+      const agent = {
+        name: "test",
+        mode: "primary",
+        options: {},
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        temperature: 0.2,
+      } satisfies Agent.Info
+
+      const user = {
+        id: MessageID.make(input.userID),
+        sessionID: SessionID.make(input.sessionID),
+        role: "user",
+        time: { created: Date.now() },
+        agent: agent.name,
+        model: { providerID: ProviderID.make("openai"), modelID: resolved.id },
+        variant: "high",
+      } satisfies MessageV2.User
+
+      const stream = await LLM.stream({
+        user,
+        sessionID: user.sessionID,
+        model: resolved,
+        agent,
+        system: ["You are a helpful assistant."],
+        abort: new AbortController().signal,
+        messages: [{ role: "user", content: "Hello" }],
+        tools: {},
+      })
+
+      const parts: LLM.Event[] = []
+      for await (const part of stream.fullStream) {
+        parts.push(part)
+      }
+
+      expect(parts.some((part) => part.type === "text-delta" && part.text === "Hello")).toBe(true)
+      expect(parts.some((part) => part.type === "finish")).toBe(true)
+
+      const capture = await request
+      expect(capture.url.pathname.endsWith("/responses")).toBe(true)
+    },
+  })
+}
+
 describe("session.llm.stream", () => {
   test("sends temperature, tokens, and reasoning options for openai-compatible models", async () => {
     const server = state.server
@@ -747,6 +866,120 @@ describe("session.llm.stream", () => {
         const expectedMaxTokens = ProviderTransform.maxOutputTokens(resolved)
         expect(maxTokens).toBe(expectedMaxTokens)
       },
+    })
+  })
+
+  test("accepts raw JSON response events for OpenAI models", async () => {
+    const responseChunks = [
+      {
+        type: "response.created",
+        response: {
+          id: "resp-raw",
+          created_at: Math.floor(Date.now() / 1000),
+          model: "gpt-5.2",
+          service_tier: null,
+        },
+      },
+      {
+        type: "response.output_text.delta",
+        item_id: "item-raw",
+        delta: "Hello",
+        logprobs: null,
+      },
+      {
+        type: "response.completed",
+        response: {
+          incomplete_details: null,
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: null,
+            output_tokens: 1,
+            output_tokens_details: null,
+          },
+          service_tier: null,
+        },
+      },
+    ]
+    await runRawResponsesTest({
+      response: createRawEventResponse(responseChunks, true),
+      sessionID: "session-test-raw-responses",
+      userID: "user-raw-responses",
+    })
+  })
+
+  test("accepts chunked raw JSON response events for OpenAI models", async () => {
+    const responseChunks = [
+      {
+        type: "response.created",
+        response: {
+          id: "resp-raw-chunked",
+          created_at: Math.floor(Date.now() / 1000),
+          model: "gpt-5.2",
+          service_tier: null,
+        },
+      },
+      {
+        type: "response.output_text.delta",
+        item_id: "item-raw-chunked",
+        delta: "Hello",
+        logprobs: null,
+      },
+      {
+        type: "response.completed",
+        response: {
+          incomplete_details: null,
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: null,
+            output_tokens: 1,
+            output_tokens_details: null,
+          },
+          service_tier: null,
+        },
+      },
+    ]
+    await runRawResponsesTest({
+      response: createRawEventResponse(responseChunks, true, { chunk: 37 }),
+      sessionID: "session-test-raw-responses-chunked",
+      userID: "user-raw-responses-chunked",
+    })
+  })
+
+  test("accepts raw JSON line response events for OpenAI models", async () => {
+    const responseChunks = [
+      {
+        type: "response.created",
+        response: {
+          id: "resp-raw-lines",
+          created_at: Math.floor(Date.now() / 1000),
+          model: "gpt-5.2",
+          service_tier: null,
+        },
+      },
+      {
+        type: "response.output_text.delta",
+        item_id: "item-raw-lines",
+        delta: "Hello",
+        logprobs: null,
+      },
+      {
+        type: "response.completed",
+        response: {
+          incomplete_details: null,
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: null,
+            output_tokens: 1,
+            output_tokens_details: null,
+          },
+          service_tier: null,
+        },
+      },
+    ]
+    await runRawResponsesTest({
+      response: createRawEventResponse(responseChunks, true, { lines: true, chunk: 41 }),
+      sessionID: "session-test-raw-responses-lines",
+      userID: "user-raw-responses-lines",
     })
   })
 
