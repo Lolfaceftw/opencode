@@ -124,6 +124,28 @@ describe("session.retry.retryable", () => {
     expect(SessionRetry.retryable(error)).toBe("Too Many Requests")
   })
 
+  test("maps structured server_error json messages", () => {
+    ;[
+      { type: "server_error", code: "server_error" },
+      { type: "server_error", code: "internal_error" },
+      { code: "server_error" },
+    ].forEach((item) => {
+      const error = wrap(
+        JSON.stringify({
+          type: "error",
+          sequence_number: 2,
+          error: {
+            ...item,
+            message: "An error occurred while processing your request. You can retry your request.",
+          },
+        }),
+      )
+      expect(SessionRetry.retryable(error)).toBe(
+        "An error occurred while processing your request. You can retry your request.",
+      )
+    })
+  })
+
   test("maps overloaded provider codes", () => {
     const error = wrap(JSON.stringify({ code: "resource_exhausted" }))
     expect(SessionRetry.retryable(error)).toBe("Provider is overloaded")

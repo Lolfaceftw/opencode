@@ -112,7 +112,7 @@ export namespace ProviderError {
     | {
         type: "api_error"
         message: string
-        isRetryable: false
+        isRetryable: boolean
         responseBody: string
       }
 
@@ -122,8 +122,20 @@ export namespace ProviderError {
 
     const responseBody = JSON.stringify(body)
     if (body.type !== "error") return
+    const code = typeof body?.error?.code === "string" ? body.error.code : ""
+    const kind = typeof body?.error?.type === "string" ? body.error.type : ""
+    const message = typeof body?.error?.message === "string" ? body.error.message : "Unknown error"
 
-    switch (body?.error?.code) {
+    if (kind === "server_error" || code === "server_error") {
+      return {
+        type: "api_error",
+        message,
+        isRetryable: true,
+        responseBody,
+      }
+    }
+
+    switch (code || kind) {
       case "context_length_exceeded":
         return {
           type: "context_overflow",

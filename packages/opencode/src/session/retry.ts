@@ -71,10 +71,15 @@ export namespace SessionRetry {
       }
     })
     if (!json || typeof json !== "object") return undefined
-    const code = typeof json.code === "string" ? json.code : ""
+    const code = typeof json.code === "string" ? json.code : typeof json.error?.code === "string" ? json.error.code : ""
+    const kind = typeof json.error?.type === "string" ? json.error.type : ""
+    const message = typeof json.error?.message === "string" ? json.error.message : undefined
 
     if (json.type === "error" && json.error?.type === "too_many_requests") {
       return "Too Many Requests"
+    }
+    if (json.type === "error" && (kind === "server_error" || code.includes("server_error"))) {
+      return message ?? "Server error"
     }
     if (code.includes("exhausted") || code.includes("unavailable")) {
       return "Provider is overloaded"

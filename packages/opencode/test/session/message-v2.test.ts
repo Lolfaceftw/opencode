@@ -846,6 +846,35 @@ describe("session.message-v2.fromError", () => {
     })
   })
 
+  test("serializes server_error stream events as retryable APIError", () => {
+    const cases = [
+      { type: "server_error", code: "server_error" },
+      { type: "server_error", code: "internal_error" },
+      { code: "server_error" },
+    ]
+
+    cases.forEach((item) => {
+      const input = {
+        type: "error",
+        sequence_number: 2,
+        error: {
+          ...item,
+          message: "An error occurred while processing your request. You can retry your request.",
+        },
+      }
+      const result = MessageV2.fromError(input, { providerID })
+
+      expect(result).toStrictEqual({
+        name: "APIError",
+        data: {
+          message: input.error.message,
+          isRetryable: true,
+          responseBody: JSON.stringify(input),
+        },
+      })
+    })
+  })
+
   test("detects context overflow from APICallError provider messages", () => {
     const cases = [
       "prompt is too long: 213462 tokens > 200000 maximum",
