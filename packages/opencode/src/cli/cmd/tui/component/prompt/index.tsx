@@ -3,6 +3,7 @@ import { createEffect, createMemo, type JSX, onMount, createSignal, onCleanup, o
 import "opentui-spinner/solid"
 import path from "path"
 import { Filesystem } from "@/util/filesystem"
+import { Ralph } from "@/session/ralph"
 import { useLocal } from "@tui/context/local"
 import { useTheme } from "@tui/context/theme"
 import { EmptyBorder, SplitBorder } from "@tui/component/border"
@@ -610,6 +611,13 @@ export function Prompt(props: PromptProps) {
 
     const messageID = MessageID.ascending()
     let inputText = store.prompt.input
+    const saved = sessionID
+      ? Ralph.current((sync.data.message[sessionID] ?? []).map((info) => ({ parts: sync.data.part[info.id] ?? [] })))
+      : undefined
+    const localValue = sessionID ? local.ralph.get(sessionID) : undefined
+    const ralph = sessionID ? (saved === undefined ? localValue : (saved ?? undefined)) : undefined
+    let seeded = false
+    const marker = ralph ? [{ type: "text" as const, text: Ralph.encode(ralph)!, synthetic: true, ignored: true }] : []
 
     // Expand pasted text inline before submitting
     const allExtmarks = input.extmarks.getAllForTypeId(promptPartTypeId)
@@ -633,8 +641,33 @@ export function Prompt(props: PromptProps) {
     // Capture mode before it gets reset
     const currentMode = store.mode
     const variant = local.model.variant.current()
+    const needsRalph = sessionID && localValue !== undefined && JSON.stringify(localValue) !== JSON.stringify(saved)
+
+    if (needsRalph) {
+      const text = localValue === null ? Ralph.clear() : Ralph.encode(localValue)
+      if (text) {
+        const result = await sdk.client.session
+          .prompt({
+            sessionID,
+            agent: local.agent.current().name,
+            model: selectedModel,
+            noReply: true,
+            parts: [{ type: "text", text, synthetic: true, ignored: true }],
+          })
+          .catch(() => undefined)
+        seeded = !!result && !result.error
+      }
+    }
 
     if (store.mode === "shell") {
+      if (needsRalph && !seeded) {
+        toast.show({
+          message: "Failed to sync Ralph for this shell turn",
+          variant: "warning",
+          duration: 3000,
+        })
+        return
+      }
       sdk.client.session.shell({
         sessionID,
         agent: local.agent.current().name,
@@ -659,6 +692,15 @@ export function Prompt(props: PromptProps) {
       const [command, ...firstLineArgs] = firstLine.split(" ")
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
+
+      if (needsRalph && !seeded) {
+        toast.show({
+          message: "Failed to sync Ralph for this command",
+          variant: "warning",
+          duration: 3000,
+        })
+        return
+      }
 
       sdk.client.session.command({
         sessionID,
@@ -685,6 +727,7 @@ export function Prompt(props: PromptProps) {
           model: selectedModel,
           variant,
           parts: [
+            ...(seeded ? [] : marker),
             {
               id: PartID.ascending(),
               type: "text",

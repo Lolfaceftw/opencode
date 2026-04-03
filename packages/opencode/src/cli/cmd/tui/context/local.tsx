@@ -13,6 +13,7 @@ import { useArgs } from "./args"
 import { useSDK } from "./sdk"
 import { RGBA } from "@opentui/core"
 import { Filesystem } from "@/util/filesystem"
+import { Ralph } from "@/session/ralph"
 
 export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
@@ -384,6 +385,68 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       },
     }
 
+    const ralph = iife(() => {
+      const [store, setStore] = createStore<{
+        ready: boolean
+        items: Record<string, Ralph.Info | null>
+      }>({
+        ready: false,
+        items: {},
+      })
+
+      const file = path.join(Global.Path.state, "ralph.json")
+      const state = {
+        pending: false,
+      }
+
+      function save() {
+        if (!store.ready) {
+          state.pending = true
+          return
+        }
+        state.pending = false
+        Filesystem.writeJson(file, store.items)
+      }
+
+      Filesystem.readJson(file)
+        .then((x: any) => {
+          if (!x || typeof x !== "object") return
+          setStore("items", (items) => ({
+            ...Object.entries(x).reduce<Record<string, Ralph.Info | null>>((agg, [key, value]) => {
+              if (value === null) {
+                agg[key] = null
+                return agg
+              }
+              const cfg = Ralph.normalize(value)
+              if (cfg) agg[key] = cfg
+              return agg
+            }, {}),
+            ...items,
+          }))
+        })
+        .catch(() => {})
+        .finally(() => {
+          setStore("ready", true)
+          if (state.pending) save()
+        })
+
+      return {
+        get(sessionID: string) {
+          return store.items[sessionID]
+        },
+        set(sessionID: string, input: Ralph.Info) {
+          const cfg = Ralph.normalize(input)
+          if (!cfg) return
+          setStore("items", sessionID, cfg)
+          save()
+        },
+        clear(sessionID: string) {
+          setStore("items", sessionID, null)
+          save()
+        },
+      }
+    })
+
     // Automatically update model when agent changes
     createEffect(() => {
       const value = agent.current()
@@ -406,6 +469,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       model,
       agent,
       mcp,
+      ralph,
     }
     return result
   },

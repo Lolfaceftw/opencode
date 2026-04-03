@@ -3,6 +3,7 @@ import os from "os"
 import z from "zod"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
+import { Ralph as RalphLoop } from "./ralph"
 import { Log } from "../util/log"
 import { SessionRevert } from "./revert"
 import { Session } from "."
@@ -89,27 +90,47 @@ const SKIP = [
   /\b(review|audit|analy[sz]e|inspect|explore)\b.*\b(until|again|further|done|finished)\b/i,
 ]
 
-function note(input: { max: number; pass?: number; persist?: boolean; stale?: boolean }) {
+function note(input: { cfg: RalphLoop.Info; pass?: number; stale?: boolean }) {
   const turn = input.pass
     ? input.stale
-      ? `${PASS} ${input.pass} of ${input.max}. The previous pass did not produce meaningful changes. Be more creative, think out of the box, and try a different angle before giving up.`
-      : `${PASS} ${input.pass} of ${input.max}. Review the latest state and only keep going if there is another worthwhile improvement to make.`
+      ? `${PASS} ${input.pass} of ${input.cfg.max}. The previous pass did not produce meaningful changes. Be more creative, think out of the box, and try a different angle before giving up.`
+      : `${PASS} ${input.pass} of ${input.cfg.max}. Review the latest state and only keep going if there is another worthwhile improvement to make.`
     : `${RALPH} is enabled for this task. Treat this as explicit user authorization to use git add, git commit, and git push for each meaningful improvement.`
-  const extra = input.persist
-    ? `
 
-If a pass stalls or produces no meaningful changes, do not stop. Instead, think more creatively, explore a different angle, and keep iterating until you find another worthwhile improvement or hit the Ralph limit.`
-    : ""
-  return `<system-reminder>
+  if (input.cfg.override && input.cfg.prompt) {
+    return RalphLoop.stamp(
+      `<system-reminder>
+${turn}
+
+${input.cfg.prompt}
+${input.cfg.instructions ? `\n\nAdditional Ralph developer instructions:\n${input.cfg.instructions}` : ""}
+</system-reminder>`,
+      input.cfg,
+    )
+  }
+
+  const extra = [
+    input.cfg.persist
+      ? "If a pass stalls or produces no meaningful changes, do not stop. Instead, think more creatively, explore a different angle, and keep iterating until you find another worthwhile improvement or hit the Ralph limit."
+      : undefined,
+    input.cfg.instructions ? `Additional Ralph developer instructions:\n${input.cfg.instructions}` : undefined,
+    `Keep iterating until no worthwhile improvement remains or you reach the Ralph loop limit of ${input.cfg.max} passes. Each pass should leave a clean version-control checkpoint behind.`,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+
+  return RalphLoop.stamp(
+    `<system-reminder>
 ${turn}
 
 After each meaningful improvement, inspect git status/diff, stage only the relevant changes, create a commit, and push to the current tracking branch. Do not force-push and do not include unrelated user changes.
 
 Also increment the relevant project version before each commit using semantic versioning in 'vX.X.X' format ('Major.Minor.BugFix'). Use major for breaking changes, minor for backwards-compatible features, and bugfix for backwards-compatible fixes.
-${extra}
 
-Keep iterating until no worthwhile improvement remains or you reach the Ralph loop limit of ${input.max} passes. Each pass should leave a clean version-control checkpoint behind.
-</system-reminder>`
+${extra}
+</system-reminder>`,
+    input.cfg,
+  )
 }
 
 function mutates(cmd: string) {
@@ -190,12 +211,12 @@ export namespace SessionPrompt {
         }),
       )
 
-      const ralph = Effect.fn("SessionPrompt.ralph")(function* () {
+      const ralph = Effect.fn("SessionPrompt.ralph")(function* (messages?: MessageV2.WithParts[]) {
+        const local = messages ? RalphLoop.current(messages) : undefined
+        if (local !== undefined) return local?.enabled ? local : null
         const raw = (yield* config.get()).experimental?.ralph_loop
-        if (!raw) return
-        if (raw === true) return { max: 3, mode: "auto" as const, persist: false }
-        if (raw.enabled === false) return
-        return { max: raw.max ?? 3, mode: raw.mode ?? "auto", persist: raw.persist ?? false }
+        const cfg = RalphLoop.normalize(raw)
+        return cfg?.enabled ? cfg : undefined
       })
 
       const getRunner = (runners: Map<string, Runner<MessageV2.WithParts>>, sessionID: SessionID) => {
@@ -343,7 +364,7 @@ export namespace SessionPrompt {
         if (!userMessage) return input.messages
 
         const remind = Effect.fnUntraced(function* () {
-          const cfg = yield* ralph()
+          const cfg = yield* ralph(input.messages)
           if (!cfg) return input.messages
           if (input.agent.mode !== "primary" || input.agent.name === "plan") return input.messages
           if (userMessage.info.format?.type === "json_schema") return input.messages
@@ -356,7 +377,7 @@ export namespace SessionPrompt {
             messageID: userMessage.info.id,
             sessionID: userMessage.info.sessionID,
             type: "text",
-            text: note({ max: cfg.max, persist: cfg.persist }),
+            text: note({ cfg }),
             synthetic: true,
           })
           userMessage.parts.push(part)
@@ -495,7 +516,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         messages: MessageV2.WithParts[]
         user: MessageV2.WithParts & { info: MessageV2.User }
       }) {
-        const cfg = yield* ralph()
+        const cfg = yield* ralph(input.messages)
         if (!cfg) return false
         if (input.user.info.format?.type === "json_schema") return false
         if (!input.user.parts.some(tag)) return false
@@ -547,7 +568,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           messageID: msg.id,
           sessionID: msg.sessionID,
           type: "text",
-          text: note({ max: cfg.max, pass: next, persist: cfg.persist, stale: !dirty }),
+          text: note({ cfg, pass: next, stale: !dirty }),
           synthetic: true,
         })
         return true

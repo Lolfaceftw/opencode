@@ -19,6 +19,7 @@ import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Session } from "../../src/session"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
+import { Ralph } from "../../src/session/ralph"
 import { AppFileSystem } from "../../src/filesystem"
 import { SessionCompaction } from "../../src/session/compaction"
 import { SessionProcessor } from "../../src/session/processor"
@@ -673,6 +674,109 @@ it.live("ralph always mode includes semantic version guidance", () =>
         experimental: {
           ralph_loop: {
             mode: "always",
+          },
+        },
+      }),
+    },
+  ),
+)
+
+it.live("session Ralph override prompt replaces the built-in reminder", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          {
+            type: "text",
+            text: Ralph.encode({
+              enabled: true,
+              mode: "always",
+              persist: false,
+              max: 4,
+              override: true,
+              prompt: "Only pursue tiny, safe improvements and explain why each pass is worthwhile.",
+            })!,
+            synthetic: true,
+            ignored: true,
+          },
+        ],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      const note = msgs
+        .flatMap((msg) => msg.parts)
+        .find(
+          (part): part is MessageV2.TextPart =>
+            part.type === "text" &&
+            part.synthetic === true &&
+            part.text.includes("Only pursue tiny, safe improvements"),
+        )
+
+      expect(note?.text.includes("After each meaningful improvement") ?? false).toBe(false)
+      expect(note?.text.includes("Only pursue tiny, safe improvements") ?? false).toBe(true)
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("session Ralph toggle off overrides config", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const { prompt, chat } = yield* boot()
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          {
+            type: "text",
+            text: Ralph.encode({ enabled: false, mode: "always", persist: false, max: 2 })!,
+            synthetic: true,
+            ignored: true,
+          },
+        ],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* Effect.promise(() => MessageV2.filterCompacted(MessageV2.stream(chat.id)))
+      expect(
+        msgs.some(
+          (msg) =>
+            msg.info.role === "user" &&
+            msg.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("Ralph loop")),
+        ),
+      ).toBe(false)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        experimental: {
+          ralph_loop: {
+            enabled: true,
+            mode: "always",
+            max: 2,
           },
         },
       }),

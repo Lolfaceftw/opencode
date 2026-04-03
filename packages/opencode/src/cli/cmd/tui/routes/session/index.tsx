@@ -60,6 +60,7 @@ import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { DialogRalph } from "../../component/dialog-ralph"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { Flag } from "@/flag/flag"
@@ -388,6 +389,18 @@ export function Session() {
             })
           })
         dialog.clear()
+      },
+    },
+    {
+      title: "Configure Ralph",
+      description: "Configure Ralph for this session",
+      value: "session.ralph",
+      category: "Agent",
+      slash: {
+        name: "ralph",
+      },
+      onSelect: (dialog) => {
+        dialog.replace(() => <DialogRalph sessionID={route.sessionID} />)
       },
     },
     {

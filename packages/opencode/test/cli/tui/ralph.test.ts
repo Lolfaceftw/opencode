@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { indicator, parse } from "../../../src/cli/cmd/tui/routes/session/ralph"
 import type { Part } from "@opencode-ai/sdk/v2"
+import { Ralph } from "../../../src/session/ralph"
 
 describe("tui Ralph indicator", () => {
   test("parses active Ralph reminders", () => {
@@ -156,5 +157,23 @@ describe("tui Ralph indicator", () => {
     }
 
     expect(indicator({ busy: true, messages: msgs, parts })).toBeUndefined()
+  })
+
+  test("hides cleared Ralph reminders", () => {
+    const part: Part = {
+      id: "prt_1",
+      messageID: "msg_1",
+      sessionID: "ses_1",
+      type: "text",
+      synthetic: true,
+      text: Ralph.stamp(
+        `<system-reminder>
+Ralph loop is disabled for this session.
+</system-reminder>`,
+        null,
+      ),
+    }
+
+    expect(parse([part])).toBeUndefined()
   })
 })

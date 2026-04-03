@@ -1,4 +1,5 @@
 import type { Part } from "@opencode-ai/sdk/v2"
+import { Ralph } from "@/session/ralph"
 
 const PASS = /Ralph loop pass (\d+) of (\d+)/
 const STALE = /did not produce meaningful changes/i
@@ -11,6 +12,7 @@ export function parse(parts: Part[]) {
     })
     .at(-1)
   if (!txt) return
+  if (Ralph.decode(txt) === null) return
   const pass = txt.match(PASS)
   if (pass)
     return {
